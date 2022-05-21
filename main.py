@@ -1,10 +1,11 @@
 from __future__ import annotations
 from platform import system
 from sys import exit, stdout
-
-from basetypes import Unit, Position, Camera
-from mapping import Map
+from basetypes import *
+import mapping
+from collectibles import KeyPickup
 from termansi import *
+from units import DelegateUnit
 
 if not stdout.isatty():
     print("STDOUT is not a terminal")
@@ -16,9 +17,17 @@ if system() == "Windows":
 
 fwrite(Terminal.erase_screen())
 
-Map.current = Map.DEBUG
-player = Unit(position=Position(1, 1))
-Map.current.tile_at(player.position).unit = player
+
+def __on_draw(self: Unit, data: RenderData):
+    data.text = "PP"
+    data.bg_color = Color(255, 0, 0)
+
+
+Map.current = mapping.DEBUG_MAP
+player = DelegateUnit(fon_draw=__on_draw)
+key = KeyPickup()
+Map.current.try_spawn_unit(player, Map.current.tile_at(Position(1, 1)))
+Map.current.try_spawn_unit(key, Map.current.tile_at(Position(5, 1)))
 
 Camera.current = Camera()
 

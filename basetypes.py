@@ -1,6 +1,6 @@
 from __future__ import annotations
 from os import get_terminal_size
-from typing import NamedTuple, ClassVar, Tuple
+from typing import NamedTuple, ClassVar, Tuple, Dict
 from termansi import fwrite, combine_modes, ColorRGB, GraphicMode, Terminal
 from dataclasses import dataclass
 
@@ -103,10 +103,13 @@ class RenderData:
         return combined
 
 
-class Unit(Drawable, Dirty):
-    def __init__(self, position: Position = Position(0, 0)):
-        super().__init__(True)
-        self.position = position
+class Unit(Drawable):
+    @property
+    def position(self):
+        return self.tile.position if self.tile else None
+
+    def __init__(self):
+        self.tile: Tile | None = None
 
     def on_enter(self, tile: Tile):
         ...
@@ -117,11 +120,14 @@ class Unit(Drawable, Dirty):
     def on_contact(self, unit: Unit):
         ...
 
-    def on_stop_contact(self, unit: Unit):
+    def on_spawn(self, tile: Tile, _map: Map):
+        ...
+
+    def on_remove(self, _map: Map):
         ...
 
     def on_draw(self, data: RenderData):
-        data.text = "()"
+        ...
 
     def on_tick(self):
         ...
@@ -133,10 +139,12 @@ class Tile(Drawable, Dirty):
         return self._unit
 
     @unit.setter
-    def unit(self, value):
+    def unit(self, value: Unit):
         if self._unit != value:
             self._unit = value
             self.is_dirty = True
+            if value:
+                self._unit.tile = self
 
     def __init__(self, position: Position = Position(0, 0)):
         super().__init__(True)
@@ -192,8 +200,7 @@ class Camera:
 
     def render(self, force=False):
         if force:
-            fwrite(Terminal.erase_screen())
-        from mapping import Map
+            fwrite(GraphicMode.RESET, Terminal.erase_screen())
         for tile in Map.current.tiles.values():
             if not Camera.current.is_visible(tile.position):
                 continue
@@ -208,13 +215,73 @@ class Camera:
                     tile.unit.is_dirty = False
                 RenderData.render(tile.position + self.origin, tile_data)
                 tile.is_dirty = False
-        Camera.is_dirty = False
         fwrite(Terminal.MOVE_HOME)
 
     @staticmethod
     def get_frustum():
         x, y = get_terminal_size()
         return x // 2 * 2, y // 2 * 2
+
+
+class Map:
+    DEBUG: Map = None
+    current: Map | None = None
+
+    def __init__(self, tiles: Dict[Position, Tile]):
+        for [pos, tile] in tiles.items():
+            tile.position = pos
+
+        self.tiles = tiles
+
+    def tick(self):
+        for tile in self.tiles.values():
+            tile.on_tick()
+
+    def tile_at(self, position: Position):
+        return self.tiles[position] if position in self.tiles else None
+
+    def try_move_unit(self, unit: Unit, position: Position):
+        if unit.position == position:
+            return True
+
+        new_tile = self.tile_at(position)
+        if not new_tile:
+            return False
+        if new_tile.unit:
+            new_tile.unit.on_contact(unit)
+            unit.on_contact(new_tile.unit)
+            return False
+        if not new_tile.can_enter(unit):
+            return False
+
+        old_tile = self.tile_at(unit.position)
+        old_unit = old_tile.unit
+        old_tile.unit = None
+        new_tile.unit = old_unit
+        old_tile.on_leave(unit)
+        unit.on_leave(old_tile)
+        new_tile.on_enter(unit)
+        unit.on_enter(new_tile)
+
+        return True
+
+    def try_spawn_unit(self, unit: Unit, tile: Tile):
+        if not tile or tile.unit or not tile.can_enter(unit):
+            return False
+
+        tile.unit = unit
+        unit.on_spawn(tile, self)
+        tile.on_enter(unit)
+        unit.on_enter(tile)
+
+    def try_remove_unit(self, unit: Unit):
+        tile = self.tile_at(unit.position)
+        if not tile:
+            raise ValueError("Unit is not spawned")
+        tile.on_leave(unit)
+        unit.on_leave(tile)
+        tile.unit = None
+        unit.on_remove(self)
 
 
 # Define constants
